@@ -18,14 +18,14 @@
  */
 import { Box, Heading, useToken } from "@chakra-ui/react";
 import {
+  BarElement,
   Chart as ChartJS,
   CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  BarElement,
   Filler,
   Legend,
+  LinearScale,
+  LineElement,
+  PointElement,
   Tooltip,
 } from "chart.js";
 import type { PartialEventContext } from "chartjs-plugin-annotation";
@@ -42,21 +42,24 @@ import { DEFAULT_DATETIME_FORMAT, formatDate, renderDuration } from "src/utils/d
 import { buildTaskInstanceUrl } from "src/utils/links";
 
 ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
   BarElement,
-  LineElement,
+  CategoryScale,
   Filler,
   Legend,
+  LinearScale,
+  LineElement,
+  PointElement,
   Tooltip,
   annotationPlugin,
 );
 
-const average = (ctx: PartialEventContext, index: number) => {
-  const values: Array<number> | undefined = ctx.chart.data.datasets[index]?.data as Array<number> | undefined;
+type RunResponse = GridRunsResponse | TaskInstanceResponse;
 
-  return values === undefined ? 0 : values.reduce((initial, next) => initial + next, 0) / values.length;
+type MkAnnotationArgs = {
+  color: string;
+  dash?: Array<number>;
+  labelFn: (ctx: PartialEventContext) => string;
+  valueFn: (ctx: PartialEventContext) => number;
 };
 
 const median = (ctx: PartialEventContext, index: number) => {
@@ -68,6 +71,24 @@ const median = (ctx: PartialEventContext, index: number) => {
 };
 
 type RunResponse = GridRunsResponse | TaskInstanceResponse;
+
+const average = (ctx: PartialEventContext, index: number) => {
+  const values = ctx.chart.data.datasets[index]?.data as Array<number> | undefined;
+
+  return values === undefined ? 0 : values.reduce((acc, next) => acc + next, 0) / values.length;
+};
+
+const median = (ctx: PartialEventContext, index: number) => {
+  const values = ctx.chart.data.datasets[index]?.data as Array<number> | undefined;
+
+  if (!values) {
+    return 0;
+  }
+  const sorted = [...values].sort((first, second) => first - second);
+  const mid = Math.floor(sorted.length / 2);
+
+  return sorted.length % 2 === 0 ? ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2 : (sorted[mid] ?? 0);
+};
 
 const getDuration = (start: string, end: string | null) => {
   const startDate = dayjs(start);
@@ -84,7 +105,6 @@ const getTickLabelFormat = (entries: Array<RunResponse>): string => {
   if (entries.length < 2) {
     return "HH:mm:ss";
   }
-
   const first = dayjs(entries[0]?.run_after);
   const last = dayjs(entries[entries.length - 1]?.run_after);
 
@@ -92,10 +112,17 @@ const getTickLabelFormat = (entries: Array<RunResponse>): string => {
     return "MMM DD";
   }
 
-  const diffInDays = Math.abs(last.diff(first, "day"));
-
-  return diffInDays < 1 ? "HH:mm:ss" : "MMM DD HH:mm";
+  return Math.abs(last.diff(first, "day")) < 1 ? "HH:mm:ss" : "MMM DD HH:mm";
 };
+
+const mkAnnotation = ({ color, dash, labelFn, valueFn }: MkAnnotationArgs) => ({
+  borderColor: color,
+  borderDash: dash,
+  borderWidth: dash ? 2 : 1,
+  label: { content: labelFn, display: true, position: "end" as const },
+  scaleID: "y",
+  value: valueFn,
+});
 
 export const DurationChart = ({
   entries,
@@ -110,7 +137,6 @@ export const DurationChart = ({
   const navigate = useNavigate();
   const { selectedTimezone } = useTimezone();
   const [queuedColorToken] = useToken("colors", ["queued.solid"]);
-
   const states = entries?.map((entry) => entry.state).filter(Boolean) ?? [];
   const stateColorTokens = useToken(
     "colors",
@@ -129,28 +155,42 @@ export const DurationChart = ({
     }
   });
 
-  const runAnnotation = {
-    borderColor: "grey",
-    borderWidth: 1,
-    label: {
-      content: (ctx: PartialEventContext) => renderDuration(average(ctx, 1), false) ?? "0",
-      display: true,
-      position: "end",
-    },
-    scaleID: "y",
-    value: (ctx: PartialEventContext) => average(ctx, 1),
-  };
+  const runAnnotation = mkAnnotation({
+    color: "grey",
+    labelFn: (ctx) => renderDuration(average(ctx, 1), false) ?? "0",
+    valueFn: (ctx) => average(ctx, 1),
+  });
+  const queuedAnnotation = mkAnnotation({
+    color: "grey",
+    labelFn: (ctx) => renderDuration(average(ctx, 0), false) ?? "0",
+    valueFn: (ctx) => average(ctx, 0),
+  });
+  const medianAnnotation = mkAnnotation({
+    color: "blue",
+    dash: [6, 3],
+    labelFn: (ctx) => `Median: ${renderDuration(median(ctx, 1), false) ?? "0"}`,
+    valueFn: (ctx) => median(ctx, 1),
+  });
 
-  const queuedAnnotation = {
-    borderColor: "grey",
-    borderWidth: 1,
-    label: {
-      content: (ctx: PartialEventContext) => renderDuration(average(ctx, 0), false) ?? "0",
-      display: true,
-      position: "end",
-    },
-    scaleID: "y",
-    value: (ctx: PartialEventContext) => average(ctx, 0),
+  const getQueuedDuration = (entry: RunResponse) => {
+    switch (kind) {
+      case "Dag Run": {
+        const run = entry as GridRunsResponse;
+
+        return run.queued_at !== null && run.start_date !== null && run.queued_at < run.start_date
+          ? Number(getDuration(run.queued_at, run.start_date))
+          : 0;
+      }
+      case "Task Instance": {
+        const ti = entry as TaskInstanceResponse;
+
+        return ti.queued_when !== null && ti.start_date !== null && ti.queued_when < ti.start_date
+          ? Number(getDuration(ti.queued_when, ti.start_date))
+          : 0;
+      }
+      default:
+        return 0;
+    }
   };
 
   const medianAnnotation = {
@@ -179,6 +219,7 @@ export const DurationChart = ({
             datasets: [
               {
                 backgroundColor: getComputedCSSVariableValue(queuedColorToken ?? "oklch(0.5 0 0)"),
+
                 data: entries.map((entry: RunResponse) => {
                   switch (kind) {
                     case "Dag Run": {
@@ -201,6 +242,9 @@ export const DurationChart = ({
                       return 0;
                   }
                 }),
+
+                data: entries.map((entry: RunResponse) => getQueuedDuration(entry)),
+
                 label: translate("durationChart.queuedDuration"),
               },
               {
@@ -214,11 +258,18 @@ export const DurationChart = ({
                 label: translate("durationChart.runDuration"),
               },
             ],
+
             labels: entries.map((entry: RunResponse) => dayjs(entry.run_after).format(DEFAULT_DATETIME_FORMAT)),
+
+            labels: entries.map((entry: RunResponse) =>
+              dayjs(entry.run_after).format(DEFAULT_DATETIME_FORMAT),
+            ),
+
           }}
           datasetIdKey="id"
           options={{
             animation: isAutoRefreshing ? false : undefined,
+
             onClick: (_event, elements) => {
               const [element] = elements;
 
@@ -253,6 +304,37 @@ export const DurationChart = ({
                   void Promise.resolve(navigate(baseUrl));
                   break;
                 }
+=======
+            maintainAspectRatio: false,
+            onClick: (_event, elements) => {
+              const [element] = elements;
+                return;
+              }
+              switch (kind) {
+                  const entry = entries[element.index] as GridRunsResponse | undefined;
+
+                  void Promise.resolve(navigate(`/dags/${entry?.dag_id}/runs/${entry?.run_id}`));
+                }
+                case "Task Instance": {
+                  const entry = entries[element.index] as TaskInstanceResponse | undefined;
+
+                  if (entry === undefined) {
+                    return;
+                  }
+                  void Promise.resolve(
+                    navigate(
+                      buildTaskInstanceUrl({
+                        currentPathname: location.pathname,
+                        dagId: entry.dag_id,
+                        isMapped: entry.map_index >= 0,
+                        mapIndex: entry.map_index.toString(),
+                        runId: entry.dag_run_id,
+                        taskId: entry.task_id,
+                      }),
+                    ),
+                  );
+                  break;
+                }
                 default:
               }
             },
@@ -264,6 +346,9 @@ export const DurationChart = ({
               annotation: {
                 annotations: { queuedAnnotation, runAnnotation, medianAnnotation },
               },
+              annotation: { annotations: { medianAnnotation, queuedAnnotation, runAnnotation } },
+              legend: { display: true, position: "top" as const },
+>>>>>>> b9a58fb175 (Fix task duration chart rendering issues)
               tooltip: {
                 callbacks: {
                   label: (context) => {
@@ -296,6 +381,8 @@ export const DurationChart = ({
                     if (num < 3600) return `${(num / 60).toFixed(1)}m`;
                     return `${(num / 3600).toFixed(1)}h`;
                   },
+                  callback: (value) =>
+                    renderDuration(typeof value === "number" ? value : Number(value), false) ?? "0",
                 },
                 title: { align: "end", display: true, text: translate("common:duration") },
               },
