@@ -260,8 +260,20 @@ export const DagRuns = () => {
     undefined,
     {
       placeholderData: (prev) => prev,
-      refetchInterval: (query) =>
-        query.state.data?.dag_runs.some((run) => isStatePending(run.state)) ? refetchInterval : false,
+      refetchInterval: (query) => {
+        const status = query.state.error?.response?.status;
+        if (status === 401 || status === 403) {
+          return false;
+        }
+        const runs = query.state.data?.dag_runs;
+        if(!runs) {
+          return false;
+        }
+        return runs.some((run) => isStatePending(run.state))
+          ? refetchInterval
+          : false;
+    },
+
     },
   );
 
