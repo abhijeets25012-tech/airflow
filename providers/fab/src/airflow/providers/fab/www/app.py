@@ -62,9 +62,11 @@ def create_app(enable_plugins: bool):
 
     @flask_app.after_request
     def remove_duplicate_date_header(response):
-        # Remove duplicate Date header added by Flask (Uvicorn already sets it)
-        response.headers.pop("Date", None)
-        response.headers.pop("date", None)
+        date_headers = response.headers.getlist("Date")
+
+        if len(date_headers) > 1:
+            # Keep only the first one (typically from Uvicorn)
+            response.headers.set("Date", date_headers[0])
         return response
     flask_app.secret_key = conf.get("api", "SECRET_KEY")
     flask_app.config["SQLALCHEMY_DATABASE_URI"] = conf.get("database", "SQL_ALCHEMY_CONN")
