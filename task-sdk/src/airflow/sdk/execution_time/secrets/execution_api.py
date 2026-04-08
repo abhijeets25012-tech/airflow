@@ -81,7 +81,9 @@ class ExecutionAPISecretsBackend(BaseSecretsBackend):
 
                     warnings.warn(
                         "Sync connection access failed due to event loop mismatch. "
-                        "Falling back to async connection retrieval.",
+                        "If you are running in an async or triggerer context, use "
+                        "`await aget_connection(conn_id)` instead of `get_connection` "
+                        "to avoid this sync call. Falling back to async connection retrieval.",
                         stacklevel=2,
                     )
                     return greenback.await_(self.aget_connection(conn_id))
