@@ -62,11 +62,9 @@ def create_app(enable_plugins: bool):
 
     @flask_app.after_request
     def remove_duplicate_date_header(response):
-        date_headers = response.headers.getlist("Date")
-
-        if len(date_headers) > 1:
-            # Keep only the first one (typically from Uvicorn)
-            response.headers.set("Date", date_headers[0])
+        # Remove the application-level Date header so the ASGI/WSGI server
+        # can emit a single Date header for the final response.
+        response.headers.pop("Date", None)
         return response
 
     flask_app.secret_key = conf.get("api", "SECRET_KEY")
