@@ -1,4 +1,3 @@
-#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -31,6 +30,8 @@ import structlog
 from opentelemetry import context, trace
 from opentelemetry.trace import StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from airflow.utils.types import DagRunType
+from airflow.utils.state import DagRunState
 from sqlalchemy import (
     JSON,
     Enum,
@@ -864,8 +865,14 @@ class DagRun(Base, LoggingMixin):
         """Check if last N dags failed."""
         dag_runs = session.scalars(
             select(DagRun)
-            .where(DagRun.dag_id == dag_id)
-            .order_by(DagRun.logical_date.desc())
+            .where(
+                DagRun.dag_id == dag_id,
+                DagRun.run_type == DagRunType.SCHEDULED,  # ignore manual runs
+            )
+            .order_by(
+                DagRun.logical_date.desc().nulls_last(),  # handle NULL properly
+                DagRun.id.desc(),  # ensure stable ordering
+            )
             .limit(max_consecutive_failed_dag_runs)
         ).all()
         """ Marking dag as paused, if needed"""
